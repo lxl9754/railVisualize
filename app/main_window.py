@@ -21,6 +21,9 @@ from PySide6.QtWidgets import (
     QRadioButton,
     QButtonGroup,
     QCheckBox,
+    QSpinBox,
+    QDoubleSpinBox,
+    QHBoxLayout,
 )
 
 from .data_loader import DataLoader
@@ -54,6 +57,11 @@ class MainWindow(QMainWindow):
 
         self._overlay_mode = True
         self._use_sahi = True
+
+        self._unet_tile_width = 1600
+        self._unet_tile_height = 800
+        self._unet_overlap_w = 0.2
+        self._unet_overlap_h = 0.2
 
         self._build_ui()
 
@@ -142,6 +150,8 @@ class MainWindow(QMainWindow):
         self._sahi_checkbox.toggled.connect(self._on_sahi_toggled)
         layout.addWidget(self._sahi_checkbox)
 
+        layout.addWidget(self._create_unet_tile_group())
+
         yolo_btn = QPushButton("运行 YOLO 图元检测")
         yolo_btn.clicked.connect(self._run_yolo)
         layout.addWidget(yolo_btn)
@@ -157,6 +167,44 @@ class MainWindow(QMainWindow):
         self._progress = QProgressBar()
         self._progress.setValue(0)
         layout.addWidget(self._progress)
+        return group
+
+    def _create_unet_tile_group(self) -> QGroupBox:
+        group = QGroupBox("滑窗配置 (YOLO/UNet 共用)")
+        layout = QVBoxLayout(group)
+
+        size_row = QHBoxLayout()
+        size_label = QLabel("滑窗大小 W/H:")
+        self._tile_w_spin = QSpinBox()
+        self._tile_w_spin.setRange(256, 8192)
+        self._tile_w_spin.setValue(self._unet_tile_width)
+        self._tile_w_spin.valueChanged.connect(self._on_tile_size_changed)
+        self._tile_h_spin = QSpinBox()
+        self._tile_h_spin.setRange(256, 8192)
+        self._tile_h_spin.setValue(self._unet_tile_height)
+        self._tile_h_spin.valueChanged.connect(self._on_tile_size_changed)
+        size_row.addWidget(size_label)
+        size_row.addWidget(self._tile_w_spin)
+        size_row.addWidget(self._tile_h_spin)
+        layout.addLayout(size_row)
+
+        overlap_row = QHBoxLayout()
+        overlap_label = QLabel("重叠率 W/H:")
+        self._overlap_w_spin = QDoubleSpinBox()
+        self._overlap_w_spin.setRange(0.0, 0.95)
+        self._overlap_w_spin.setSingleStep(0.05)
+        self._overlap_w_spin.setValue(self._unet_overlap_w)
+        self._overlap_w_spin.valueChanged.connect(self._on_overlap_changed)
+        self._overlap_h_spin = QDoubleSpinBox()
+        self._overlap_h_spin.setRange(0.0, 0.95)
+        self._overlap_h_spin.setSingleStep(0.05)
+        self._overlap_h_spin.setValue(self._unet_overlap_h)
+        self._overlap_h_spin.valueChanged.connect(self._on_overlap_changed)
+        overlap_row.addWidget(overlap_label)
+        overlap_row.addWidget(self._overlap_w_spin)
+        overlap_row.addWidget(self._overlap_h_spin)
+        layout.addLayout(overlap_row)
+
         return group
 
     def _on_mode_changed(self) -> None:
@@ -227,7 +275,13 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "提示", "YOLO 推理正在进行")
             return
         self._progress.setValue(0)
-        self._yolo_worker = YoloWorker(self._yolo_model_path, self._image_path, use_sahi=self._use_sahi)
+        self._yolo_worker = YoloWorker(
+            self._yolo_model_path,
+            self._image_path,
+            use_sahi=self._use_sahi,
+            slice_size=(self._unet_tile_height, self._unet_tile_width),
+            overlap_ratio=(self._unet_overlap_h, self._unet_overlap_w),
+        )
         self._yolo_worker.progress_changed.connect(self._progress.setValue)
         self._yolo_worker.result_ready.connect(self._handle_yolo_result)
         self._yolo_worker.error.connect(lambda msg: QMessageBox.warning(self, "错误", msg))
@@ -237,8 +291,18 @@ class MainWindow(QMainWindow):
         if self._unet_worker and self._unet_worker.isRunning():
             QMessageBox.information(self, "提示", "UNet 推理正在进行")
             return
+        try:
+            import torch  # noqa: F401
+        except Exception:
+            QMessageBox.warning(self, "错误", "未检测到 torch，请先安装 requirements.txt")
+            return
         self._progress.setValue(0)
-        self._unet_worker = UnetWorker(self._unet_model_path, self._image_path)
+        self._unet_worker = UnetWorker(
+            self._unet_model_path,
+            self._image_path,
+            tile_size=(self._unet_tile_height, self._unet_tile_width),
+            overlap_ratio=(self._unet_overlap_h, self._unet_overlap_w),
+        )
         self._unet_worker.progress_changed.connect(self._progress.setValue)
         self._unet_worker.result_ready.connect(self._handle_unet_result)
         self._unet_worker.error.connect(lambda msg: QMessageBox.warning(self, "错误", msg))
@@ -292,3 +356,11 @@ class MainWindow(QMainWindow):
 
     def _refresh_scene(self, primitives_only: bool = False, tracks_only: bool = False) -> None:
         self._render_scene(primitives_only=primitives_only, tracks_only=tracks_only)
+
+    def _on_tile_size_changed(self) -> None:
+        self._unet_tile_width = int(self._tile_w_spin.value())
+        self._unet_tile_height = int(self._tile_h_spin.value())
+
+    def _on_overlap_changed(self) -> None:
+        self._unet_overlap_w = float(self._overlap_w_spin.value())
+        self._unet_overlap_h = float(self._overlap_h_spin.value())

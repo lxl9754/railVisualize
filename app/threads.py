@@ -10,68 +10,136 @@ class YoloWorker(QThread):
     result_ready = Signal(list)
     error = Signal(str)
 
-    def __init__(self, model_path: Optional[str], image_path: Optional[str]) -> None:
+    def __init__(
+        self,
+        model_path: Optional[str],
+        image_path: Optional[str],
+        use_sahi: bool = False,
+        slice_size: Tuple[int, int] = (900, 1700),
+        overlap_ratio: Tuple[float, float] = (0.2, 0.2),
+        xsignal_min_conf: float = 0.7,
+        conf_threshold: float = 0.5,
+        device: Optional[str] = None,
+    ) -> None:
         super().__init__()
         self._model_path = model_path
         self._image_path = image_path
+        self._use_sahi = use_sahi
+        self._slice_width, self._slice_height = slice_size
+        self._overlap_w, self._overlap_h = overlap_ratio
+        self._xsignal_min_conf = xsignal_min_conf
+        self._conf_threshold = conf_threshold
+        self._device = device
 
     def run(self) -> None:
         try:
             if not self._model_path or not self._image_path:
                 raise RuntimeError("未加载模型或图片")
             self.progress_changed.emit(5)
-            from ultralytics import YOLO
-
-            model = YOLO(self._model_path)
-            self.progress_changed.emit(20)
-            results = model.predict(self._image_path, verbose=False)
-            if not results:
-                raise RuntimeError("YOLO 推理未返回结果")
-
-            result = results[0]
-            names = getattr(result, "names", None) or getattr(model, "names", None)
-            boxes = getattr(result, "boxes", None)
-            keypoints = getattr(result, "keypoints", None)
-            kp_xy = keypoints.xy if keypoints is not None else None
-            kp_conf = keypoints.conf if keypoints is not None else None
-
-            output = []
-            if boxes is not None:
-                for idx, box in enumerate(boxes):
-                    xyxy = box.xyxy[0].cpu().tolist()
-                    conf = float(box.conf[0]) if box.conf is not None else 0.0
-                    cls_id = int(box.cls[0]) if box.cls is not None else -1
-                    if isinstance(names, dict):
-                        category_name = names.get(cls_id, str(cls_id))
-                    elif isinstance(names, (list, tuple)) and cls_id >= 0 and cls_id < len(names):
-                        category_name = names[cls_id]
-                    else:
-                        category_name = "unknown"
-
-                    parsed_keypoints = None
-                    if kp_xy is not None and idx < len(kp_xy):
-                        parsed_keypoints = []
-                        xy_item = kp_xy[idx].cpu().tolist()
-                        conf_item = kp_conf[idx].cpu().tolist() if kp_conf is not None else None
-                        for kp_index, point in enumerate(xy_item):
-                            kp_score = conf_item[kp_index] if conf_item is not None else 1.0
-                            parsed_keypoints.append([float(point[0]), float(point[1]), float(kp_score)])
-
-                    output.append(
-                        {
-                            "id": idx + 1,
-                            "bbox": [float(xyxy[0]), float(xyxy[1]), float(xyxy[2]), float(xyxy[3])],
-                            "score": conf,
-                            "category_id": cls_id,
-                            "category_name": category_name,
-                            "keypoints": parsed_keypoints,
-                        }
-                    )
-
+            if self._use_sahi:
+                output = self._run_sahi()
+            else:
+                output = self._run_ultralytics()
             self.progress_changed.emit(100)
             self.result_ready.emit(output)
         except Exception as exc:  # pragma: no cover - UI feedback
             self.error.emit(str(exc))
+
+    def _run_ultralytics(self) -> list:
+        from ultralytics import YOLO
+
+        model = YOLO(self._model_path)
+        self.progress_changed.emit(20)
+        results = model.predict(self._image_path, verbose=False)
+        if not results:
+            raise RuntimeError("YOLO 推理未返回结果")
+
+        result = results[0]
+        names = getattr(result, "names", None) or getattr(model, "names", None)
+        boxes = getattr(result, "boxes", None)
+        keypoints = getattr(result, "keypoints", None)
+        kp_xy = keypoints.xy if keypoints is not None else None
+        kp_conf = keypoints.conf if keypoints is not None else None
+
+        output = []
+        if boxes is not None:
+            for idx, box in enumerate(boxes):
+                xyxy = box.xyxy[0].cpu().tolist()
+                conf = float(box.conf[0]) if box.conf is not None else 0.0
+                cls_id = int(box.cls[0]) if box.cls is not None else -1
+                if isinstance(names, dict):
+                    category_name = names.get(cls_id, str(cls_id))
+                elif isinstance(names, (list, tuple)) and cls_id >= 0 and cls_id < len(names):
+                    category_name = names[cls_id]
+                else:
+                    category_name = "unknown"
+
+                parsed_keypoints = None
+                if kp_xy is not None and idx < len(kp_xy):
+                    parsed_keypoints = []
+                    xy_item = kp_xy[idx].cpu().tolist()
+                    conf_item = kp_conf[idx].cpu().tolist() if kp_conf is not None else None
+                    for kp_index, point in enumerate(xy_item):
+                        kp_score = conf_item[kp_index] if conf_item is not None else 1.0
+                        parsed_keypoints.append([float(point[0]), float(point[1]), float(kp_score)])
+
+                output.append(
+                    {
+                        "id": idx + 1,
+                        "bbox": [float(xyxy[0]), float(xyxy[1]), float(xyxy[2]), float(xyxy[3])],
+                        "score": conf,
+                        "category_id": cls_id,
+                        "category_name": category_name,
+                        "keypoints": parsed_keypoints,
+                    }
+                )
+
+        return output
+
+    def _run_sahi(self) -> list:
+        from sahi_pose import AutoDetectionModel
+        from sahi_pose.predict import get_sliced_prediction
+        import torch
+
+        device = self._device or ("cuda:0" if torch.cuda.is_available() else "cpu")
+        detection_model = AutoDetectionModel.from_pretrained(
+            model_type="yolov8pose",
+            model_path=self._model_path,
+            confidence_threshold=self._conf_threshold,
+            device=device,
+        )
+        self.progress_changed.emit(30)
+        result = get_sliced_prediction(
+            self._image_path,
+            detection_model,
+            slice_height=self._slice_height,
+            slice_width=self._slice_width,
+            overlap_height_ratio=self._overlap_h,
+            overlap_width_ratio=self._overlap_w,
+            postprocess_type="NMS",
+            postprocess_match_threshold=0.5,
+        )
+
+        predictions = []
+        id_counter = 1
+        for pred in result.object_prediction_list:
+            if pred.category.name == "xsignal" and pred.score.value < self._xsignal_min_conf:
+                continue
+
+            keypoints = pred.keypoints or []
+            predictions.append(
+                {
+                    "id": id_counter,
+                    "bbox": [float(coord) for coord in pred.bbox.to_xyxy()],
+                    "score": float(pred.score.value),
+                    "category_id": int(pred.category.id),
+                    "category_name": pred.category.name,
+                    "keypoints": [[float(x), float(y), float(c)] for x, y, c in keypoints],
+                }
+            )
+            id_counter += 1
+
+        return predictions
 
 
 class UnetWorker(QThread):

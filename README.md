@@ -48,4 +48,4 @@ python main.py
 
 ## Notes
 - This is a UI-ready scaffold; replace the placeholder inference in `app/threads.py` with your actual YOLO/UNet code.
-
+- YOLO supports SAHI sliced inference; use the "启用 SAHI 切片推理 (YOLO)" checkbox in the UI.

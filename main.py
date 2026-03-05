@@ -1,6 +1,7 @@
 import sys
 
 from app.main_window import MainWindow
+from app.style import get_app_stylesheet
 
 try:
     from PySide6.QtWidgets import QApplication
@@ -10,6 +11,7 @@ except ImportError as exc:  # pragma: no cover - runtime only
 
 def main() -> int:
     app = QApplication(sys.argv)
+    app.setStyleSheet(get_app_stylesheet())  #设置UI风格
     window = MainWindow()
     window.show()
     return app.exec()
@@ -17,4 +19,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

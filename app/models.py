@@ -19,4 +19,4 @@ class Primitive:
     category_id: int
     category_name: str
     keypoints: Optional[List[Tuple[float, float, float]]] = None
-
+    name: Optional[str] = None

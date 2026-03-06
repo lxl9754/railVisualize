@@ -159,6 +159,74 @@ class YoloWorker(QThread):
         return predictions
 
 
+class OcrWorker(QThread):
+    progress_changed = Signal(int)
+    result_ready = Signal(list)
+    error = Signal(str)
+
+    def __init__(
+        self,
+        image_path: Optional[str],
+        primitives: list,
+        det_model_dir: Optional[str] = None,
+        rec_model_dir: Optional[str] = None,
+        det_limit_type: Optional[str] = None,
+        min_text_score: float = 0.5,
+        crop_padding: int = 2,
+    ) -> None:
+        super().__init__()
+        self._image_path = image_path
+        self._primitives = [dict(item) for item in primitives]
+        self._det_model_dir = det_model_dir
+        self._rec_model_dir = rec_model_dir
+        self._det_limit_type = det_limit_type
+        self._min_text_score = min_text_score
+        self._crop_padding = crop_padding
+
+    def run(self) -> None:
+        try:
+            if not self._image_path:
+                raise RuntimeError("未加载图片")
+            if not self._primitives:
+                raise RuntimeError("未检测到图元，无法执行 OCR")
+            self.progress_changed.emit(5)
+            from .ocr_pipeline import OcrConfig, annotate_primitives_with_ocr
+
+            config = OcrConfig(
+                det_model_dir=self._det_model_dir,
+                rec_model_dir=self._rec_model_dir,
+                det_limit_type=self._det_limit_type,
+                min_text_score=self._min_text_score,
+                crop_padding=self._crop_padding,
+            )
+            output = annotate_primitives_with_ocr(
+                self._image_path,
+                self._primitives,
+                config,
+                progress_cb=self.progress_changed.emit,
+            )
+            self._save_ocr_results(output)
+            self.progress_changed.emit(100)
+            self.result_ready.emit(output)
+        except Exception as exc:  # pragma: no cover - UI feedback
+            self.error.emit(str(exc))
+
+    def _save_ocr_results(self, output: list) -> None:
+        import json
+
+        results_dir = self._build_results_dir()
+        results_dir.mkdir(parents=True, exist_ok=True)
+        json_path = results_dir / "yolo_primitives.json"
+        json_path.write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _build_results_dir(self) -> "Path":
+        from pathlib import Path
+
+        image_path = Path(self._image_path) if self._image_path else Path("image")
+        base = image_path.stem
+        return Path(__file__).resolve().parents[1] / "results" / base
+
+
 class UnetWorker(QThread):
     progress_changed = Signal(int)
     result_ready = Signal(list)

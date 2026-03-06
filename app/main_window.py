@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import List, Optional
+import json
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QPixmap
@@ -30,7 +31,7 @@ from .data_loader import DataLoader
 from .graphics import SceneRenderer
 from .simulation_items import SimulationRenderer
 from .models import Primitive, TrackLine
-from .threads import UnetWorker, YoloWorker
+from .threads import UnetWorker, YoloWorker, OcrWorker
 from .view import ZoomableGraphicsView
 
 
@@ -46,6 +47,7 @@ class MainWindow(QMainWindow):
 
         self._track_lines: List[TrackLine] = []
         self._primitives: List[Primitive] = []
+        self._raw_primitives: List[dict] = []
 
         self._scene = QGraphicsScene()
         self._scene_renderer = SceneRenderer(self._scene)
@@ -54,6 +56,7 @@ class MainWindow(QMainWindow):
 
         self._yolo_worker: Optional[YoloWorker] = None
         self._unet_worker: Optional[UnetWorker] = None
+        self._ocr_worker: Optional[OcrWorker] = None
 
         self._overlay_mode = True
         self._use_sahi = True
@@ -156,6 +159,10 @@ class MainWindow(QMainWindow):
         yolo_btn.clicked.connect(self._run_yolo)
         layout.addWidget(yolo_btn)
 
+        ocr_btn = QPushButton("运行 OCR 识别")
+        ocr_btn.clicked.connect(self._run_ocr)
+        layout.addWidget(ocr_btn)
+
         unet_btn = QPushButton("运行 UNet 轨道线提取")
         unet_btn.clicked.connect(self._run_unet)
         layout.addWidget(unet_btn)
@@ -255,7 +262,9 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
-            self._primitives = DataLoader.load_primitives(path)
+            raw_data = json.loads(Path(path).read_text(encoding="utf-8"))
+            self._raw_primitives = raw_data if isinstance(raw_data, list) else []
+            self._primitives = DataLoader.load_primitives_from_raw(self._raw_primitives)
             self._refresh_scene(primitives_only=True)
         except Exception as exc:
             QMessageBox.warning(self, "错误", f"加载图元失败: {exc}")
@@ -308,11 +317,37 @@ class MainWindow(QMainWindow):
         self._unet_worker.error.connect(lambda msg: QMessageBox.warning(self, "错误", msg))
         self._unet_worker.start()
 
+    def _run_ocr(self) -> None:
+        if self._ocr_worker and self._ocr_worker.isRunning():
+            QMessageBox.information(self, "提示", "OCR 推理正在进行")
+            return
+        if not self._image_path:
+            QMessageBox.warning(self, "错误", "请先导入原图")
+            return
+        if not self._raw_primitives:
+            QMessageBox.warning(self, "错误", "请先完成图元检测或导入图元 JSON")
+            return
+        self._progress.setValue(0)
+        self._ocr_worker = OcrWorker(self._image_path, self._raw_primitives)
+        self._ocr_worker.progress_changed.connect(self._progress.setValue)
+        self._ocr_worker.result_ready.connect(self._handle_ocr_result)
+        self._ocr_worker.error.connect(lambda msg: QMessageBox.warning(self, "错误", msg))
+        self._ocr_worker.start()
+
     def _run_both(self) -> None:
         self._run_yolo()
         self._run_unet()
 
     def _handle_yolo_result(self, raw_result: list) -> None:
+        self._raw_primitives = raw_result
+        try:
+            self._primitives = DataLoader.load_primitives_from_raw(raw_result)
+        except Exception:
+            self._primitives = []
+        self._render_scene(primitives_only=True)
+
+    def _handle_ocr_result(self, raw_result: list) -> None:
+        self._raw_primitives = raw_result
         try:
             self._primitives = DataLoader.load_primitives_from_raw(raw_result)
         except Exception:

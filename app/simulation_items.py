@@ -4,13 +4,14 @@ from dataclasses import dataclass
 from typing import Iterable, List, Optional
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF, QBrush
+from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF, QBrush, QFont, QFontMetricsF
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsScene
 
 from .models import Primitive, TrackLine
 
 TRACK_COLOR = QColor(0, 100, 255)
 POLE_COLOR = QColor(0, 85, 127)  # 信号机柱的深蓝色
+PRIMITIVE_SCALE = 2.0
 
 
 class TrackItem(QGraphicsItem):
@@ -38,19 +39,20 @@ class InsulationItem(QGraphicsItem):
     def __init__(self, center: QPointF, parent: Optional[QGraphicsItem] = None) -> None:
         super().__init__(parent)
         self._center = center
-        self._half_height = 5
+        self._half_height = 5 * PRIMITIVE_SCALE
         self.setCacheMode(QGraphicsItem.ItemCoordinateCache)
 
     def boundingRect(self) -> QRectF:
+        pad = 2 * PRIMITIVE_SCALE
         return QRectF(
-            self._center.x() - 2,
-            self._center.y() - self._half_height - 2,
-            4,
-            self._half_height * 2 + 4,
+            self._center.x() - pad,
+            self._center.y() - self._half_height - pad,
+            pad * 2,
+            self._half_height * 2 + pad * 2,
         )
 
     def paint(self, painter: QPainter, option, widget=None) -> None:
-        pen = QPen(Qt.cyan, 2)
+        pen = QPen(Qt.cyan, 2 * PRIMITIVE_SCALE)
         painter.setPen(pen)
         painter.drawLine(
             QPointF(self._center.x(), self._center.y() - self._half_height),
@@ -62,16 +64,17 @@ class SwitchItem(QGraphicsItem):
     def __init__(self, center: QPointF, parent: Optional[QGraphicsItem] = None) -> None:
         super().__init__(parent)
         self._center = center
-        self._half_base = 4
-        self._height = 8
+        self._half_base = 4 * PRIMITIVE_SCALE
+        self._height = 8 * PRIMITIVE_SCALE
         self.setCacheMode(QGraphicsItem.ItemCoordinateCache)
 
     def boundingRect(self) -> QRectF:
+        pad = 1 * PRIMITIVE_SCALE
         return QRectF(
-            self._center.x() - self._half_base - 1,
-            self._center.y() - self._height - 1,
-            self._half_base * 2 + 2,
-            self._height + 2,
+            self._center.x() - self._half_base - pad,
+            self._center.y() - self._height - pad,
+            self._half_base * 2 + pad * 2,
+            self._height + pad * 2,
         )
 
     def paint(self, painter: QPainter, option, widget=None) -> None:
@@ -110,9 +113,9 @@ class SignalItem(QGraphicsItem):
         self._style = style
 
         # === 核心几何参数微调 ===
-        self._pole_length = 16  # 机柱的固定长度
+        self._pole_length = 16 * PRIMITIVE_SCALE  # 机柱的固定长度
         self._radius = self._pole_length / 2  # 圆的半径 = 机柱长度的一半 (直径等于机柱)
-        self._pole_width = 2  # 机柱的线宽
+        self._pole_width = 2 * PRIMITIVE_SCALE  # 机柱的线宽
         # =========================
 
         # 计算真正的机柱中心点
@@ -129,7 +132,7 @@ class SignalItem(QGraphicsItem):
 
     def boundingRect(self) -> QRectF:
         # 精确计算包围盒，防止残影
-        margin = 3  # 边缘冗余量，包容粗边框
+        margin = 3 * PRIMITIVE_SCALE  # 边缘冗余量，包容粗边框
 
         if self._direction > 0:
             left = self._center.x() - self._pole_width / 2 - margin
@@ -165,7 +168,7 @@ class SignalItem(QGraphicsItem):
 
         # 3. 画圆
         # 粗一点的浅蓝色边框
-        circle_pen = QPen(QColor(100, 200, 255), 2.0)
+        circle_pen = QPen(QColor(100, 200, 255), 2.0 * PRIMITIVE_SCALE)
         painter.setPen(circle_pen)
 
         # 绘制内侧圆（填充传入的颜色：红或蓝）
@@ -175,6 +178,43 @@ class SignalItem(QGraphicsItem):
         # 绘制外侧圆（绝对不填充：透明透底）
         painter.setBrush(Qt.NoBrush)
         painter.drawEllipse(outer_center, self._radius, self._radius)
+
+
+class NameLabelItem(QGraphicsItem):
+    def __init__(
+        self,
+        text: str,
+        center: QPointF,
+        align: Qt.AlignmentFlag = Qt.AlignCenter,
+        parent: Optional[QGraphicsItem] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._text = text
+        self._center = center
+        self._align = align
+        self._font = QFont("Arial", int(10 * PRIMITIVE_SCALE))
+        metrics = QFontMetricsF(self._font)
+        self._text_rect = metrics.boundingRect(self._text)
+        self.setCacheMode(QGraphicsItem.ItemCoordinateCache)
+
+    def boundingRect(self) -> QRectF:
+        return QRectF(
+            self._center.x() - self._text_rect.width() / 2,
+            self._center.y() - self._text_rect.height() / 2,
+            self._text_rect.width(),
+            self._text_rect.height(),
+        )
+
+    def paint(self, painter: QPainter, option, widget=None) -> None:
+        painter.setFont(self._font)
+        painter.setPen(QPen(Qt.white))
+        rect = QRectF(
+            self._center.x() - self._text_rect.width() / 2,
+            self._center.y() - self._text_rect.height() / 2,
+            self._text_rect.width(),
+            self._text_rect.height(),
+        )
+        painter.drawText(rect, self._align, self._text)
 
 
 class SimulationRenderer:
@@ -209,6 +249,12 @@ class SimulationRenderer:
                 item.setZValue(2)
                 self._scene.addItem(item)
                 self._items.append(item)
+                if primitive.name:
+                    label_pos = QPointF(center.x(), center.y() - 14 * PRIMITIVE_SCALE)
+                    label = NameLabelItem(primitive.name, label_pos, Qt.AlignCenter)
+                    label.setZValue(4)
+                    self._scene.addItem(label)
+                    self._items.append(label)
             elif primitive.category_name in ("xsignal", "dsignal") and primitive.keypoints:
                 if len(primitive.keypoints) < 3:
                     continue
@@ -226,3 +272,13 @@ class SimulationRenderer:
                 item.setZValue(3)
                 self._scene.addItem(item)
                 self._items.append(item)
+
+                if primitive.name:
+                    center = QPointF((pole_top.x() + pole_bottom.x()) / 2, (pole_top.y() + pole_bottom.y()) / 2)
+                    direction = 1.0 if indicator.x() > center.x() else -1.0
+                    offset = 20 * PRIMITIVE_SCALE if direction < 0 else -20 * PRIMITIVE_SCALE
+                    label_pos = QPointF(center.x() + offset, center.y())
+                    label = NameLabelItem(primitive.name, label_pos, Qt.AlignCenter)
+                    label.setZValue(4)
+                    self._scene.addItem(label)
+                    self._items.append(label)

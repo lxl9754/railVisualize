@@ -30,6 +30,7 @@ class DataLoader:
                     category_id=item.get("category_id", -1),
                     category_name=item.get("category_name", "unknown"),
                     keypoints=parsed_keypoints,
+                    name=item.get("name"),
                 )
             )
         return primitives

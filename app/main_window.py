@@ -385,7 +385,7 @@ class MainWindow(QMainWindow):
                 if self._track_lines:
                     self._sim_renderer.render_tracks(self._track_lines)
                 if self._primitives:
-                    self._sim_renderer.render_primitives(self._primitives)
+                    self._sim_renderer.render_primitives(self._primitives, self._track_lines)
             if full_refresh:
                 self._scene_renderer.clear()
 
